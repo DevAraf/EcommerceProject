@@ -55,6 +55,43 @@ public class ProductsController : ControllerBase
     }
 
     // --------------------------------------------------
+    // GET: Product by ID
+    // --------------------------------------------------
+    [HttpGet("{id:long}")]
+    public async Task<IActionResult> GetProductById(long id)
+    {
+        var product = await _db.Products
+            .Include(p => p.ProductImages)
+            .Where(p => p.ProductId == id && p.DeletedAt == null)
+            .Select(p => new
+            {
+                productId = p.ProductId,
+                productsName = p.ProductsName,
+                description = p.Description,
+                price = p.Price,
+                quantity = p.Quantity,
+                sku = p.Sku,
+                categoryId = p.CategoryId,
+                categoryName = p.Category.Name,
+
+                images = p.ProductImages
+                    .Select(i => new
+                    {
+                        productImageId = i.ProductImageId,
+                        imageUrl = i.ImageUrl,
+                        fileName = i.FileName
+                    })
+                    .ToList()
+            })
+            .FirstOrDefaultAsync();
+
+        if (product == null)
+            return NotFound("Product not found".SendResponse());
+
+        return Ok(product);
+    }
+
+    // --------------------------------------------------
     // POST: Create product
     // --------------------------------------------------
     [HttpPost]

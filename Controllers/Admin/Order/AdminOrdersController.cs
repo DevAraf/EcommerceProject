@@ -16,17 +16,92 @@ namespace EcommerceProject.Controllers.Admin.Order
             _db = db;
         }
 
+        //[HttpGet]
+        //public async Task<IActionResult> GetAllOrders()
+        //{
+        //    var orders = await _db.Orders
+        //        .Include(o => o.User)
+        //        .Include(o => o.Status)
+        //        .Include(o => o.PaymentMethod)
+        //        .Include(o => o.ShippingAddress)
+        //        .Include(o => o.OrderItems)
+        //            .ThenInclude(oi => oi.Product)
+        //        .OrderByDescending(o => o.CreatedAt)
+        //        .ToListAsync();
+
+        //    var result = orders.Select(o => new
+        //    {
+        //        OrderId = o.OrderId,
+        //        CustomerName = o.User.UserName,
+        //        CreatedAt = o.CreatedAt,
+        //        Status = o.Status.Name,
+        //        PaymentMethod = o.PaymentMethod.Name,
+        //        ShippingAddress = o.ShippingAddress == null
+        //            ? null
+        //            : $"{o.ShippingAddress.AddressLine1}, {o.ShippingAddress.City}, {o.ShippingAddress.Country}",
+        //        Items = o.OrderItems.Select(oi => new
+        //        {
+        //            ProductId = oi.ProductId,
+        //            ProductName = oi.Product.ProductsName,
+        //            Quantity = oi.Quantity,
+        //            Price = oi.Price
+        //        }).ToList(),
+        //        TotalAmount = o.OrderItems.Sum(oi => oi.Quantity * oi.Price)
+        //    });
+
+        //    return Ok(result);
+        //}
+
         [HttpGet]
-        public async Task<IActionResult> GetAllOrders()
+        public async Task<IActionResult> GetAllOrders(
+    [FromQuery] long? orderId,
+    [FromQuery] long? statusId,
+    [FromQuery] DateTime? fromDate,
+    [FromQuery] DateTime? toDate)
         {
-            var orders = await _db.Orders
+            var query = _db.Orders
                 .Include(o => o.User)
                 .Include(o => o.Status)
                 .Include(o => o.PaymentMethod)
                 .Include(o => o.ShippingAddress)
                 .Include(o => o.OrderItems)
                     .ThenInclude(oi => oi.Product)
-                .OrderByDescending(o => o.CreatedAt)
+                .AsQueryable();
+
+            // Order ID filter
+            if (orderId.HasValue)
+            {
+                query = query.Where(o =>
+                    o.OrderId == orderId.Value);
+            }
+
+            // Order Status filter
+            if (statusId.HasValue)
+            {
+                query = query.Where(o =>
+                    o.OrderStatusId == statusId.Value);
+            }
+
+            // From Date
+            if (fromDate.HasValue)
+            {
+                var startDate = fromDate.Value.Date;
+
+                query = query.Where(o =>
+                    o.CreatedAt >= startDate);
+            }
+
+            // To Date
+            if (toDate.HasValue)
+            {
+                var endDate = toDate.Value.Date.AddDays(1);
+
+                query = query.Where(o =>
+                    o.CreatedAt < endDate);
+            }
+
+            var orders = await query
+                .OrderByDescending(o => o.CreatedAt) 
                 .ToListAsync();
 
             var result = orders.Select(o => new
@@ -36,9 +111,13 @@ namespace EcommerceProject.Controllers.Admin.Order
                 CreatedAt = o.CreatedAt,
                 Status = o.Status.Name,
                 PaymentMethod = o.PaymentMethod.Name,
+
                 ShippingAddress = o.ShippingAddress == null
                     ? null
-                    : $"{o.ShippingAddress.AddressLine1}, {o.ShippingAddress.City}, {o.ShippingAddress.Country}",
+                    : $"{o.ShippingAddress.AddressLine1}, " +
+                      $"{o.ShippingAddress.City}, " +
+                      $"{o.ShippingAddress.Country}",
+
                 Items = o.OrderItems.Select(oi => new
                 {
                     ProductId = oi.ProductId,
@@ -46,7 +125,9 @@ namespace EcommerceProject.Controllers.Admin.Order
                     Quantity = oi.Quantity,
                     Price = oi.Price
                 }).ToList(),
-                TotalAmount = o.OrderItems.Sum(oi => oi.Quantity * oi.Price)
+
+                TotalAmount = o.OrderItems
+                    .Sum(oi => oi.Quantity * oi.Price)
             });
 
             return Ok(result);
