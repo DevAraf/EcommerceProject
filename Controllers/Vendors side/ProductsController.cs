@@ -34,8 +34,9 @@ public class ProductsController : ControllerBase
         //    .Select(v => v.VendorId)
         //    .FirstOrDefaultAsync();
 
+        var baseUri = $"{Request.Scheme}://{Request.Host}";
+
         var products = await _db.Products
-            //.Where(p => p.VendorId == vendorId && p.DeletedAt == null)
             .Select(p => new ProductListDto
             {
                 ProductId = p.ProductId,
@@ -44,12 +45,22 @@ public class ProductsController : ControllerBase
                 Quantity = p.Quantity,
                 StatusName = p.Status.Name,
                 CreatedAt = p.CreatedAt,
+
                 FirstImageUrl = p.ProductImages
                     .OrderBy(i => i.ProductImageId)
                     .Select(i => i.ImageUrl)
                     .FirstOrDefault()
             })
             .ToListAsync();
+
+        foreach (var product in products)
+        {
+            if (!string.IsNullOrEmpty(product.FirstImageUrl))
+            {
+                product.FirstImageUrl =
+                    $"{baseUri}{product.FirstImageUrl}";
+            }
+        }
 
         return Ok(products);
     }
