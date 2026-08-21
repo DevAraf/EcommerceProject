@@ -14,6 +14,8 @@ namespace VendorEcommerceProject.Dtos.Vendor.ProductVariants
         public string Value { get; set; } = string.Empty;
         // e.g. Red, Blue, XL
 
+
+        public long? ParentVariantId { get; set; }
         [Required]
         public decimal Price { get; set; }
         // price difference from base product

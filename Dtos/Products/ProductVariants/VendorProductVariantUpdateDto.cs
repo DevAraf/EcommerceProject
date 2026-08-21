@@ -10,6 +10,9 @@ namespace VendorEcommerceProject.Dtos.Vendor.ProductVariants
         [Required, MaxLength(200)]
         public string Value { get; set; } = string.Empty;
 
+
+        public long? ParentVariantId { get; set; }
+
         [Required]
         public decimal Price { get; set; }
 

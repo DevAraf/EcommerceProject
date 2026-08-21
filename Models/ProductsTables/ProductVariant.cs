@@ -31,6 +31,15 @@ namespace VendorEcommerceProject.Models.ProductsTables
         [Range(0, int.MaxValue)]
         public int Quantity { get; set; }
 
+
+        public long? ParentVariantId { get; set; }
+
+        [ForeignKey(nameof(ParentVariantId))]
+        public ProductVariant? ParentVariant { get; set; }
+
+        public IList<ProductVariant> ChildVariants { get; set; }
+            = new List<ProductVariant>();
+
         public IList<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
         public IList<CartItem> CartItems { get; set; } = new List<CartItem>();
     }

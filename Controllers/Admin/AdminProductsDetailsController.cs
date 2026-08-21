@@ -30,6 +30,7 @@ public class AdminProductsDetailsController : ControllerBase
             .Include(p => p.ProductTags)
             .Include(p => p.Variants)
                 .ThenInclude(v => v.Attribute)
+                
             .FirstOrDefaultAsync(p => p.ProductId == id);
 
         if (product == null)
@@ -64,15 +65,21 @@ public class AdminProductsDetailsController : ControllerBase
                 .ToList(),
 
             Variants = product.Variants
-                .Select(v => new AdminProductVariantDto
-                {
-                    ProductVariantId = v.ProductVariantId,
-                    AttributeName = v.Attribute.Name,
+               .Select(v => new AdminProductVariantDto
+              {
+                      ProductVariantId = v.ProductVariantId,
+
+                       ParentVariantId = v.ParentVariantId,
+
+                     AttributeName = v.Attribute.Name,
+
                     Value = v.Value,
+
                     Price = v.Price,
-                    Quantity = v.Quantity
-                })
-                .ToList(),
+
+                  Quantity = v.Quantity
+              })
+                          .ToList(),
 
             Tags = product.ProductTags
                 .Select(t => new AdminProductTagDto

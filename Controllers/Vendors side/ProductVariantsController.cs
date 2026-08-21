@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
 using VendorEcommerceProject.Dtos.Vendor.ProductVariants;
 using VendorEcommerceProject.Dtos.Vendor.ProductVariants.VendorProductVariantBulk;
 using VendorEcommerceProject.Helpers;
@@ -19,52 +18,64 @@ public class ProductVariantsController : ControllerBase
         _db = db;
     }
 
-    // ----------------------------------------
-    // GET: Variants of a product (vendor only)
-    // ----------------------------------------
-    //[HttpGet("{productId:long}")]
-    //public async Task<IActionResult> GetByProduct(long productId)
-    //{
-    //    long userId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    //    var product = await _db.Products
-    //        .Include(p => p.Vendor)
-    //        .FirstOrDefaultAsync(p => p.ProductId == productId && p.Vendor.UserId == userId);
+    // ============================================================
+    // GET: Get all product variants
+    // ============================================================
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var variants = await _db.ProductVariants
+            .OrderBy(v => v.ProductId)
+            .ThenBy(v => v.ParentVariantId)
+            .ThenBy(v => v.ProductVariantId)
+            .Select(v => new VendorProductVariantListDto
+            {
+                ProductVariantId = v.ProductVariantId,
 
-    //    if (product == null)
-    //        return NotFound("Product not found".SendResponse());
+                ParentVariantId = v.ParentVariantId,
 
-    //    var variants = await _db.ProductVariants
-    //        .Where(v => v.ProductId == productId)
-    //        .Select(v => new VendorProductVariantListDto
-    //        {
-    //            ProductVariantId = v.ProductVariantId,
-    //            AttributeName = v.Attribute.Name,
-    //            Value = v.Value,
-    //            AdditionalPrice = v.AdditionalPrice,
-    //            Quantity = v.Quantity
-    //        })
-    //        .ToListAsync();
+                AttributeName = v.Attribute.Name,
 
-    //    return Ok(variants);
-    //}
+                Value = v.Value,
+
+                Price = v.Price,
+
+                Quantity = v.Quantity
+            })
+            .ToListAsync();
+
+        return Ok(variants);
+    }
+
+    // ============================================================
+    // GET: Get all variants of a product
+    // ============================================================
     [HttpGet("{productId:long}")]
     public async Task<IActionResult> GetByProduct(long productId)
     {
-        var product = await _db.Products
-            .FirstOrDefaultAsync(p => p.ProductId == productId);
+        var productExists = await _db.Products
+            .AnyAsync(p => p.ProductId == productId);
 
-        if (product == null)
+        if (!productExists)
             return NotFound("Product not found".SendResponse());
 
         var variants = await _db.ProductVariants
             .Where(v => v.ProductId == productId)
+            .OrderBy(v => v.ParentVariantId)
+            .ThenBy(v => v.ProductVariantId)
             .Select(v => new VendorProductVariantListDto
             {
                 ProductVariantId = v.ProductVariantId,
+
+                ParentVariantId = v.ParentVariantId,
+
                 AttributeName = v.Attribute.Name,
+
                 Value = v.Value,
+
                 Price = v.Price,
+
                 Quantity = v.Quantity
             })
             .ToListAsync();
@@ -73,166 +84,434 @@ public class ProductVariantsController : ControllerBase
     }
 
 
-    // ----------------------------------------
-    // POST: Variants of a product array type uopload
-    // ----------------------------------------
-
+    // ============================================================
+    // POST: Create multiple variants
+    // ============================================================
     [HttpPost("bulk")]
-    public async Task<IActionResult> BulkCreate(VendorProductVariantBulkCreateDto dto)
+    public async Task<IActionResult> BulkCreate(
+        VendorProductVariantBulkCreateDto dto)
     {
-        long userId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var productExists = await _db.Products
+            .AnyAsync(p => p.ProductId == dto.ProductId);
 
-        // 1️ Check product ownership
-        var product = await _db.Products
-            //.Include(p => p.Vendor)
-            .FirstOrDefaultAsync(p =>
-                p.ProductId == dto.ProductId);
-                //p.Vendor.UserId == userId);
-
-        if (product == null)
+        if (!productExists)
             return BadRequest("Invalid product".SendResponse());
 
         if (dto.Variants == null || !dto.Variants.Any())
             return BadRequest("No variants provided".SendResponse());
 
-        // 2️ Prevent duplicate values in request (XL, XL)
-        var duplicateValues = dto.Variants
-            .GroupBy(v => new { v.ProductAttributeId, v.Value })
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key.Value)
+
+        // --------------------------------------------------------
+        // Validate all parent variants
+        // --------------------------------------------------------
+
+        var parentIds = dto.Variants
+            .Where(v => v.ParentVariantId.HasValue)
+            .Select(v => v.ParentVariantId!.Value)
+            .Distinct()
             .ToList();
 
-        if (duplicateValues.Any())
-            return BadRequest($"Duplicate variant values found: {string.Join(", ", duplicateValues)}".SendResponse());
+        if (parentIds.Any())
+        {
+            var validParents = await _db.ProductVariants
+                .Where(v =>
+                    parentIds.Contains(v.ProductVariantId) &&
+                    v.ProductId == dto.ProductId)
+                .Select(v => new
+                {
+                    v.ProductVariantId,
+                    v.ParentVariantId
+                })
+                .ToListAsync();
 
-        // 3️ Prevent duplicate variants already in DB
+            if (validParents.Count != parentIds.Count)
+            {
+                return BadRequest(
+                    "One or more parent variants are invalid"
+                    .SendResponse());
+            }
+
+            // Parent itself must be a root variant
+            if (validParents.Any(v => v.ParentVariantId.HasValue))
+            {
+                return BadRequest(
+                    "A child variant cannot be used as a parent"
+                    .SendResponse());
+            }
+        }
+
+
+        // --------------------------------------------------------
+        // Prevent duplicate variants inside request
+        //
+        // Same Product + Parent + Attribute + Value
+        // --------------------------------------------------------
+
+        var duplicateVariants = dto.Variants
+            .GroupBy(v => new
+            {
+                v.ParentVariantId,
+                v.ProductAttributeId,
+                v.Value
+            })
+            .Where(g => g.Count() > 1)
+            .ToList();
+
+        if (duplicateVariants.Any())
+        {
+            return BadRequest(
+                "Duplicate variants found in request"
+                .SendResponse());
+        }
+
+
+        // --------------------------------------------------------
+        // Check existing variants in database
+        // --------------------------------------------------------
+
         var existingVariants = await _db.ProductVariants
             .Where(v => v.ProductId == dto.ProductId)
-            .Select(v => new { v.ProductAttributeId, v.Value })
+            .Select(v => new
+            {
+                v.ParentVariantId,
+                v.ProductAttributeId,
+                v.Value
+            })
             .ToListAsync();
 
-        var conflicts = dto.Variants.Any(v =>
-            existingVariants.Any(e =>
-                e.ProductAttributeId == v.ProductAttributeId &&
-                e.Value == v.Value));
 
-        if (conflicts)
-            return BadRequest("One or more variants already exist".SendResponse());
+        var hasConflict = dto.Variants.Any(requestVariant =>
+            existingVariants.Any(existingVariant =>
+                existingVariant.ParentVariantId ==
+                    requestVariant.ParentVariantId &&
 
-        // 4️ Create variants
-        var newVariants = dto.Variants.Select(v => new ProductVariant
+                existingVariant.ProductAttributeId ==
+                    requestVariant.ProductAttributeId &&
+
+                existingVariant.Value ==
+                    requestVariant.Value
+            )
+        );
+
+
+        if (hasConflict)
         {
-            ProductId = dto.ProductId,
-            ProductAttributeId = v.ProductAttributeId,
-            Value = v.Value,
-            Price = v.AdditionalPrice,
-            Quantity = v.Quantity,
-            CreatedAt = DateTime.UtcNow
-        }).ToList();
+            return BadRequest(
+                "One or more variants already exist"
+                .SendResponse());
+        }
+
+
+        // --------------------------------------------------------
+        // Create variants
+        // --------------------------------------------------------
+
+        var newVariants = dto.Variants
+            .Select(v => new ProductVariant
+            {
+                ProductId = dto.ProductId,
+
+                ProductAttributeId =
+                    v.ProductAttributeId,
+
+                Value = v.Value,
+
+                ParentVariantId =
+                    v.ParentVariantId,
+
+                Price = v.AdditionalPrice,
+
+                Quantity = v.Quantity,
+
+                CreatedAt = DateTime.UtcNow
+            })
+            .ToList();
+
 
         _db.ProductVariants.AddRange(newVariants);
+
         await _db.SaveChangesAsync();
 
-        return Ok("Variants added successfully".SendResponse());
+        return Ok(
+            "Variants added successfully"
+            .SendResponse());
     }
 
-    // ----------------------------------------
-    // POST: Create variant
-    // ----------------------------------------
+
+    // ============================================================
+    // POST: Create single variant
+    // ============================================================
     [HttpPost]
-    public async Task<IActionResult> Create(VendorProductVariantCreateDto dto)
+    public async Task<IActionResult> Create(
+        VendorProductVariantCreateDto dto)
     {
-        long userId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        // --------------------------------------------------------
+        // Check product
+        // --------------------------------------------------------
 
-        var product = await _db.Products
-            //.Include(p => p.Vendor)
-            .FirstOrDefaultAsync(p =>
-                p.ProductId == dto.ProductId);
-                //p.Vendor.UserId == userId);
+        var productExists = await _db.Products
+            .AnyAsync(p => p.ProductId == dto.ProductId);
 
-        if (product == null)
-            return BadRequest("Invalid product".SendResponse());
+        if (!productExists)
+            return BadRequest(
+                "Invalid product".SendResponse());
+
+
+        // --------------------------------------------------------
+        // Parent validation
+        // --------------------------------------------------------
+
+        if (dto.ParentVariantId.HasValue)
+        {
+            var parentVariant = await _db.ProductVariants
+                .FirstOrDefaultAsync(v =>
+                    v.ProductVariantId ==
+                        dto.ParentVariantId.Value &&
+
+                    v.ProductId ==
+                        dto.ProductId);
+
+            if (parentVariant == null)
+            {
+                return BadRequest(
+                    "Invalid parent variant"
+                    .SendResponse());
+            }
+
+
+            // A child cannot become a parent
+            if (parentVariant.ParentVariantId.HasValue)
+            {
+                return BadRequest(
+                    "A child variant cannot be used as a parent"
+                    .SendResponse());
+            }
+        }
+
+
+        // --------------------------------------------------------
+        // Duplicate check
+        // --------------------------------------------------------
+
+        var exists = await _db.ProductVariants
+            .AnyAsync(v =>
+                v.ProductId == dto.ProductId &&
+
+                v.ParentVariantId ==
+                    dto.ParentVariantId &&
+
+                v.ProductAttributeId ==
+                    dto.ProductAttributeId &&
+
+                v.Value == dto.Value);
+
+
+        if (exists)
+        {
+            return BadRequest(
+                "Variant already exists"
+                .SendResponse());
+        }
+
+
+        // --------------------------------------------------------
+        // Create
+        // --------------------------------------------------------
 
         var variant = new ProductVariant
         {
             ProductId = dto.ProductId,
-            ProductAttributeId = dto.ProductAttributeId,
+
+            ProductAttributeId =
+                dto.ProductAttributeId,
+
             Value = dto.Value,
+
+            ParentVariantId =
+                dto.ParentVariantId,
+
             Price = dto.Price,
+
             Quantity = dto.Quantity,
+
             CreatedAt = DateTime.UtcNow
         };
 
+
         _db.ProductVariants.Add(variant);
+
         await _db.SaveChangesAsync();
 
-        return Ok("Variant added successfully".SendResponse());
+        return Ok(
+            "Variant added successfully"
+            .SendResponse());
     }
 
-    // ----------------------------------------
-    // PUT: Update variant
-    // ----------------------------------------
-    [HttpPut]
-    public async Task<IActionResult> Update(VendorProductVariantUpdateDto dto)
-    {
-        long userId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+    // ============================================================
+    // PUT: Update variant
+    // ============================================================
+    [HttpPut]
+    public async Task<IActionResult> Update(
+        VendorProductVariantUpdateDto dto)
+    {
         var variant = await _db.ProductVariants
-            .Include(v => v.Product)
-            //.ThenInclude(p => p.Vendor)
             .FirstOrDefaultAsync(v =>
-                v.ProductVariantId == dto.ProductVariantId);
-                //v.Product.Vendor.UserId == userId);
+                v.ProductVariantId ==
+                    dto.ProductVariantId);
 
         if (variant == null)
-            return NotFound("Variant not found".SendResponse());
+        {
+            return NotFound(
+                "Variant not found"
+                .SendResponse());
+        }
 
-        variant.Value = dto.Value;
-        variant.Price = dto.Price;
-        variant.Quantity = dto.Quantity;
-        variant.ModifiedAt = DateTime.UtcNow;
+
+        // --------------------------------------------------------
+        // Parent validation
+        // --------------------------------------------------------
+
+        if (dto.ParentVariantId.HasValue)
+        {
+            // Cannot be its own parent
+            if (dto.ParentVariantId.Value ==
+                dto.ProductVariantId)
+            {
+                return BadRequest(
+                    "A variant cannot be its own parent"
+                    .SendResponse());
+            }
+
+
+            var parentVariant = await _db.ProductVariants
+                .FirstOrDefaultAsync(v =>
+                    v.ProductVariantId ==
+                        dto.ParentVariantId.Value &&
+
+                    v.ProductId ==
+                        variant.ProductId);
+
+
+            if (parentVariant == null)
+            {
+                return BadRequest(
+                    "Invalid parent variant"
+                    .SendResponse());
+            }
+
+
+            // Child cannot become parent
+            if (parentVariant.ParentVariantId.HasValue)
+            {
+                return BadRequest(
+                    "A child variant cannot be used as a parent"
+                    .SendResponse());
+            }
+        }
+
+
+        // --------------------------------------------------------
+        // Duplicate check
+        // --------------------------------------------------------
+
+        var exists = await _db.ProductVariants
+            .AnyAsync(v =>
+                v.ProductVariantId !=
+                    dto.ProductVariantId &&
+
+                v.ProductId ==
+                    variant.ProductId &&
+
+                v.ParentVariantId ==
+                    dto.ParentVariantId &&
+
+                v.ProductAttributeId ==
+                    variant.ProductAttributeId &&
+
+                v.Value ==
+                    dto.Value);
+
+
+        if (exists)
+        {
+            return BadRequest(
+                "Variant already exists"
+                .SendResponse());
+        }
+
+
+        // --------------------------------------------------------
+        // Update
+        // --------------------------------------------------------
+
+        variant.ParentVariantId =
+            dto.ParentVariantId;
+
+        variant.Value =
+            dto.Value;
+
+        variant.Price =
+            dto.Price;
+
+        variant.Quantity =
+            dto.Quantity;
+
+        variant.ModifiedAt =
+            DateTime.UtcNow;
+
 
         await _db.SaveChangesAsync();
-        return Ok("Variant updated".SendResponse());
+
+        return Ok(
+            "Variant updated"
+            .SendResponse());
     }
 
-    // ----------------------------------------
+
+    // ============================================================
     // DELETE: Remove variant
-    // ----------------------------------------
-    //[HttpDelete("{id:long}")]
-    //public async Task<IActionResult> Delete(long id)
-    //{
-    //    long userId = long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-    //    var variant = await _db.ProductVariants
-    //        .Include(v => v.Product)
-    //        .ThenInclude(p => p.Vendor)
-    //        .FirstOrDefaultAsync(v =>
-    //            v.ProductVariantId == id &&
-    //            v.Product.Vendor.UserId == userId);
-
-    //    if (variant == null)
-    //        return NotFound();
-
-    //    _db.ProductVariants.Remove(variant);
-    //    await _db.SaveChangesAsync();
-
-    //    return Ok("Variant deleted".SendResponse());
-    //}
+    // ============================================================
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id)
     {
         var variant = await _db.ProductVariants
-            .Include(v => v.Product)
-            .FirstOrDefaultAsync(v => v.ProductVariantId == id);
+            .FirstOrDefaultAsync(v =>
+                v.ProductVariantId == id);
 
         if (variant == null)
-            return NotFound();
+            return NotFound(
+                "Variant not found"
+                .SendResponse());
+
+
+        // --------------------------------------------------------
+        // Check child variants
+        // --------------------------------------------------------
+
+        var hasChildren = await _db.ProductVariants
+            .AnyAsync(v =>
+                v.ParentVariantId == id);
+
+
+        if (hasChildren)
+        {
+            return BadRequest(
+                "Cannot delete this variant because it has child variants"
+                .SendResponse());
+        }
+
+
+        // --------------------------------------------------------
+        // Delete
+        // --------------------------------------------------------
 
         _db.ProductVariants.Remove(variant);
 
         await _db.SaveChangesAsync();
 
-        return Ok("Variant deleted".SendResponse());
+        return Ok(
+            "Variant deleted"
+            .SendResponse());
     }
 }
