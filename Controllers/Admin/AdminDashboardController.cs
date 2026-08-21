@@ -75,6 +75,31 @@ namespace VendorEcommerceProject.Controllers.Admin
             return Ok(orders);
         }
 
+
+
+        // =================================================
+        // CUSTOMERS
+        // =================================================
+        //[HttpGet("customers")]
+        //public async Task<IActionResult> GetCustomers()
+        //{
+        //    var customers = await _db.Users
+        //        .Where(u => u.CustomerDetails != null)
+        //        .Select(u => new
+        //        {
+        //            u.Id,
+        //            u.FullName,
+        //            u.Email,
+        //            u.IsActive
+        //        })
+        //        .ToListAsync();
+
+        //    return Ok(customers);
+        //}
+
+
+
+
         // =================================================
         // VENDOR PAYABLE SNAPSHOT
         // =================================================
